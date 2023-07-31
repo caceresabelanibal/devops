@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terminalpmc
+  labels:
+    app: terminalpmc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: terminalpmc
+  template:
+    metadata:
+      labels:
+        app: terminalpmc
+    spec:
+      containers:
+      - name: terminalpmc
+        #image: "docker.io/caceresabelanibal/app41:latest"
+        image: billetera20acr.azurecr.io/billetera/terminalpmc:cae
+        ports:
+        - containerPort: 80
