@@ -1,4 +1,17 @@
-provider "helm" {
+/*
+
+## Quick Suite challenge ##
+
+Terraform module using helm and bitnami template to create a galera MariaDB cluster with synchronous multi-master.
+
+- Created by Anibal Cáceres
+- Date: 1/26/2024
+- Editable settings are commented
+- 2 Resources: 1 cluster with 3 pods, and one service to expose it.
+
+*/
+
+provider "helm" { # Edit this section with the provider to deploy
   kubernetes {
     config_path = "~/.kube/config"
   }
@@ -7,8 +20,8 @@ provider "helm" {
 resource "helm_release" "mariadb" {
   name       = "mariadb-galera"
   repository = "https://charts.bitnami.com/bitnami"
-  chart      = "galera"
-  version    = "1.3.8"
+  chart      = "mariadb-galera"
+  version    = "11.2.0"
 
   set {
     name  = "rootUser.password"
@@ -43,5 +56,25 @@ resource "helm_release" "mariadb" {
   set {
     name  = "mariadb.master.persistence.size"
     value = "1Gi" # Set size of the database
+  }
+}
+
+resource "kubernetes_service" "mariadb_service" { # This service is to expose the DB through a load balancer.
+  metadata {
+    name = "mariadb-service"
+  }
+
+  spec {
+    selector = {
+      app = "mariadb-galera"
+    }
+
+    port {
+      protocol = "TCP"
+      port     = 3306
+      target_port = 3306
+    }
+
+    type = "LoadBalancer"
   }
 }
