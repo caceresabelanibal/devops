@@ -7,7 +7,6 @@ Terraform module using helm and bitnami template to create a galera MariaDB clus
 - Created by Anibal Cáceres
 - Date: 1/26/2024
 - Editable settings are commented
-- 2 Resources: 1 cluster with 3 pods, and one service to expose it.
 
 */
 
