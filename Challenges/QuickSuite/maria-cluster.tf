@@ -58,23 +58,3 @@ resource "helm_release" "mariadb" {
     value = "1Gi" # Set size of the database
   }
 }
-
-resource "kubernetes_service" "mariadb_service" { # This service is to expose the DB through a load balancer.
-  metadata {
-    name = "mariadb-service"
-  }
-
-  spec {
-    selector = {
-      app = "mariadb-galera"
-    }
-
-    port {
-      protocol = "TCP"
-      port     = 3306
-      target_port = 3306
-    }
-
-    type = "LoadBalancer"
-  }
-}
