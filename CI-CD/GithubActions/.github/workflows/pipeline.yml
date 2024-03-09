@@ -1,0 +1,23 @@
+name: Win - Deploy Nist
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy-win:
+    runs-on: self-hosted
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v2   
+    - name: Run deploy
+      run: |
+        $sourceDir = "."
+        $destinationDir = "//localhost/Nist-Webapp/"
+        Copy-Item -Path $sourceDir\* -Destination $destinationDir -Force -Recurse
+
+    - name: Simple replace string in file
+      uses: MathieuSoysal/replace-string-in-file@v1.1.0
+      with:
+        file: /localhost/Nist-Webapp/APP/conex.php
+        old-string: $con1 = mysqli_connect('localhost','root','','nist');
+        new-string: $con1 = mysqli_connect('localhost','root','','nist_db');
