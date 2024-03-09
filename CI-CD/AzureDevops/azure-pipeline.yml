@@ -1,0 +1,324 @@
+variables:
+- name: image-tag
+  value: $(Build.BuildId)
+
+
+# This step is to trigger a build pipeline is a change is detected in the microservice repo.
+
+
+resources:
+  repositories:
+  - repository: A
+    type: git
+    name: Billetera 2.0/Sa.Wallet.TerminalPmc
+    ref: main
+    trigger:
+    - main
+
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - Sa.Wallet.TerminalPmc/
+
+# Stages configurations , this is the configuration to build an image for DEV and TEST
+
+stages:
+      - stage: dev_stage
+        displayName: Dev & Test build
+        jobs: 
+        - job:
+          pool:
+            name: tanzubajos
+          displayName: Dev & Test build
+          steps:
+          - checkout: self
+            fetchDepth: 0
+          - checkout: git://Sa.Wallet.TerminalPmc
+            persistCredentials: true 
+
+# Prerequisites install
+
+          - task: UseDotNet@2
+            displayName: '.Net Core sdk 6.x'
+            inputs:
+              packageType: sdk
+              version: 6.x
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+              includePreviewVersions: true
+
+          - task: CmdLine@2
+            displayName: 'Obtain TAG variable'
+            inputs:
+              script: |
+                for /f "delims=" %%t in ('git tag') do @echo %%t
+                for /f "delims=" %%t in ('git tag') do (
+                    echo ##vso[task.setvariable variable=GitTags]%%t
+                )
+              workingDirectory: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc'
+
+          - task: CmdLine@2
+            displayName: 'Show TAG variable value'
+            inputs:
+              script: |
+                echo $(GitTags)
+
+          - task: PowerShell@2
+            displayName: 'Write TAG variable value'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $Tag = "$(GitTags)"
+                $filePath = "$(Build.ArtifactStagingDirectory)\LatestGitTag.txt"
+                Set-Content -Path $filePath -Value $Tag
+
+# xUnit TEST
+
+          - task: DotNetCoreCLI@2
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+            displayName: "xUnit - Run tests"
+            inputs:
+              command: 'test'
+              projects: '$(Build.SourcesDirectory)/**/*.csproj'
+              #projects: '*Test*/*.csproj'
+              arguments: '/p:CollectCoverage=true /p:CoverletOutputFormat=cobertura%2cjson%2copencover /p:MergeWith=$(Agent.TempDirectory)/coverage.json /p:CoverletOutput=$(Agent.TempDirectory)/'
+              password: 's1SWu%7.V3IW'
+            enabled: false
+          # Install Report Generator
+
+          - script: 'dotnet tool install -g dotnet-reportgenerator-globaltool  '
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+            displayName: 'xUnit - Install Report Generator'
+            enabled: false
+
+          # Generate code coverage report
+
+          - script: 'reportgenerator -reports:$(Agent.TempDirectory)\coverage.cobertura.xml -targetdir:$(Agent.TempDirectory) -reporttypes:"Cobertura"'
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+            displayName: 'xUnit - Generate code coverage report'
+            enabled: false
+          # Publish code coverage
+
+          - task: PublishCodeCoverageResults@1
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+            displayName: 'xUnit - Publish code coverage from $(Build.SourcesDirectory)/Cobertura.xml'
+            inputs:
+                  codeCoverageTool: Cobertura
+                  summaryFileLocation: '$(build.SourcesDirectory)/Cobertura.xml'
+            enabled: false
+          # Prepare Analysis Configuration task
+
+          - task: SonarQubePrepare@5
+            condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
+            displayName: 'Sonar'
+            inputs:
+              SonarQube: 'walletterminalpmcsq'
+              scannerMode: 'MSBuild'
+              projectKey: 'SonarCloud'
+              extraProperties: 'sonar.cs.opencover.reportsPaths="$(Agent.TempDirectory)/coverage.opencover.xml"'
+            enabled: false
+
+
+          - task: SonarCloudPrepare@1
+            inputs:
+              SonarCloud: 'sonarcloud'
+              organization: 'asjservicios'
+              scannerMode: 'MSBuild'
+              projectKey: 'AsjServicios_Sa.Wallet.TerminalPmc'
+              projectName: 'Sa.Wallet.TerminalPmc'
+
+# Docker tasks
+
+          - task: DockerInstaller@0
+            inputs:
+              dockerVersion: '17.09.0-ce'
+
+          - task: Docker@2
+            displayName: Docker logout
+            inputs:
+              containerRegistry: 'Harbor-dev'
+              command: 'logout'
+          - task: Docker@2
+            displayName: Docker login
+            inputs:
+              containerRegistry: 'Harbor-dev'
+              command: login
+          - task: Docker@2
+            displayName: Docker Build & Push
+            inputs:
+              containerRegistry: 'Harbor-dev'
+              repository: 'bsj/terminalpmc'
+              command: 'buildAndPush'
+              Dockerfile: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc\Dockerfile'
+              buildContext: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc'
+              tags: 'DEV-BSJ-$(GitTags)-$(Build.BuildId)'
+
+# Replace variables in manifest in DEV
+          - task: replacetokens@5
+            displayName: 'Variable override DEV'
+            inputs:
+              rootDirectory: '$(Build.SourcesDirectory)\Pipelines\Sa.Wallet.TerminalPmc\manifests'
+              targetFiles: '**/*.yml'
+              encoding: 'auto'
+              tokenPattern: 'azpipelines'
+              writeBOM: true
+              actionOnMissing: 'warn'
+              keepToken: true
+              actionOnNoFiles: 'continue'
+              enableTransforms: false
+              enableRecursion: false
+              useLegacyPattern: false
+              enableTelemetry: true
+
+
+#  Publish K8s & SQL Artifacts - These are the artifacts used to deploy in "releases"
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish K8s Artifacts for DEV'
+            inputs:
+              PathtoPublish: '$(Build.SourcesDirectory)\Pipelines\Sa.Wallet.TerminalPmc\manifests'
+              ArtifactName: 'terminalpmcartifact-manifests'
+              publishLocation: 'Container'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish SQL scripts for Flyway'
+            inputs:
+              PathtoPublish: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc\scripts'
+              ArtifactName: 'terminalpmcartifact-SQL'
+              publishLocation: 'Container'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/LatestGitTag.txt'
+              ArtifactName: 'GitTags'
+            displayName: 'Publish GitTags Artifact'
+
+
+##############################################
+#                                            #
+# Sand / PROD                                #
+#                                            #
+##############################################
+
+
+# Stages configurations , this is the configuration to build an image for SAND and PROD
+
+      - stage: sandbox_prod
+        displayName: Sandbox & Prod build
+        dependsOn: dev_stage
+        jobs:
+        - job:
+          pool:
+            name: agentpooltanzualtos
+          displayName: Sandbox & Prod build
+          steps:
+          - checkout: self
+            fetchDepth: 0
+          - checkout: git://Sa.Wallet.TerminalPmc
+            persistCredentials: true
+
+# Prerequisites install
+
+          - task: UseDotNet@2
+            displayName: '.Net Core sdk 6.x'
+            inputs:
+              packageType: sdk
+              version: 6.x
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+              includePreviewVersions: true
+          - task: CmdLine@2
+            displayName: 'Show TAG variable value'
+            inputs:
+              script: |
+                echo $(GitTags)
+          - task: CmdLine@2
+            displayName: 'Obtain TAG variable'
+            inputs:
+              script: |
+                for /f "delims=" %%t in ('git tag') do @echo %%t
+                for /f "delims=" %%t in ('git tag') do (
+                    echo ##vso[task.setvariable variable=GitTags]%%t
+                )
+              workingDirectory: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc'
+
+          - task: CmdLine@2
+            displayName: 'Show TAG variable value'
+            inputs:
+              script: |
+                echo $(GitTags)
+
+          - task: PowerShell@2
+            displayName: 'Write TAG variable value'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $Tag = "$(GitTags)"
+                $filePath = "$(Build.ArtifactStagingDirectory)\LatestGitTag.txt"
+                Set-Content -Path $filePath -Value $Tag
+
+# Docker tasks
+
+          - task: DockerInstaller@0
+            inputs:
+              dockerVersion: '17.09.0-ce'
+
+          - task: Docker@2
+            displayName: Docker logout
+            inputs:
+              containerRegistry: 'Harbor-prod'
+              command: 'logout'
+              
+          - task: Docker@2
+            displayName: Docker login
+            inputs:
+              containerRegistry: 'Harbor-prod'
+              command: 'login'
+          - task: Docker@2
+            displayName: Docker Build & Push
+            inputs:
+              containerRegistry: 'Harbor-prod'
+              repository: 'bsj/terminalpmc'
+              command: 'buildAndPush'
+              Dockerfile: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc\Dockerfile'
+              buildContext: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc'
+              tags: 'SAND-BSJ-$(GitTags)-$(Build.BuildId)'
+
+# Replace variables in manifest in SAND/PROD
+          - task: replacetokens@5
+            displayName: 'Variable override SAND/PROD'
+            inputs:
+              rootDirectory: '$(Build.SourcesDirectory)\Pipelines\Sa.Wallet.TerminalPmc\manifests'
+              targetFiles: '**/*.yml'
+              encoding: 'auto'
+              tokenPattern: 'azpipelines'
+              writeBOM: true
+              actionOnMissing: 'warn'
+              keepToken: true
+              actionOnNoFiles: 'continue'
+              enableTransforms: false
+              enableRecursion: false
+              useLegacyPattern: false
+              enableTelemetry: true
+
+#  Publish K8s & SQL Artifacts - These are the artifacts used to deploy in "releases"
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish K8s Artifacts for SAND y PROD'
+            inputs:
+                PathtoPublish: '$(Build.SourcesDirectory)\Pipelines\Sa.Wallet.TerminalPmc\manifests'
+                ArtifactName: 'terminalpmcartifact-manifests'
+                publishLocation: 'Container'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish SQL scripts for Flyway'
+            inputs:
+              PathtoPublish: '$(Build.SourcesDirectory)\Sa.Wallet.TerminalPmc\scripts'
+              ArtifactName: 'terminalpmcartifact-SQL'
+              publishLocation: 'Container'
+          - task: PublishBuildArtifacts@1
+
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/LatestGitTag.txt'
+              ArtifactName: 'GitTags'
+            displayName: 'Publish GitTags Artifact'
